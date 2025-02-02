@@ -28,6 +28,8 @@ from pytorch_fid.inception import InceptionV3
 from pytorch_fid.fid_score import calculate_frechet_distance
 import matplotlib.pyplot as plt
 import numpy as np
+import wandb
+from datetime import datetime
 
 __version__ = "0.0"
 
@@ -715,13 +717,15 @@ class Trainer(object):
         save_and_sample_every = 1000,
         num_samples = 3,
         results_folder = './results',
-        amp = True,
-        fp16 = True,
+        accelerator = None,
         split_batches = True,
         convert_image_to = None,
         calculate_fid = True,
         inception_block_idx = 2048, 
         cond_drop_chance=0.1,
+        cond = True,
+        log = False,
+        wandb_name = None,
     ):
         super().__init__()
 
@@ -730,14 +734,12 @@ class Trainer(object):
         self.tokenizer = tokenizer
         self.text_encoder = text_encoder
 
+        self.cond = cond
+        self.log = log
+        self.wandb_name = wandb_name
         # accelerator
 
-        self.accelerator = Accelerator(
-            split_batches = split_batches,
-            mixed_precision = 'fp16' if fp16 else 'no'
-        )
-
-        self.accelerator.native_amp = amp
+        self.accelerator = accelerator
 
         # model
 
@@ -794,6 +796,12 @@ class Trainer(object):
         if self.accelerator.is_main_process:
             self.ema = EMA(diffusion_model, beta = ema_decay, update_every = ema_update_every)
             self.ema.to(self.device)
+
+        dt = datetime.now().strftime('%m-%d-%H-%M-%S')
+        if wandb_name is not None:
+            results_folder = f'{results_folder}/{dt}-{wandb_name}'
+        else:
+            results_folder = f'{results_folder}/{dt}'
 
         self.results_folder = Path(results_folder)
         self.results_folder.mkdir(exist_ok = True, parents = True)
@@ -854,7 +862,10 @@ class Trainer(object):
 
     def sample(self, x_conds, batch_text, batch_size=1, guidance_weight=0):
         device = self.device
-        task_embeds = self.encode_batch_text(batch_text)
+        if self.cond:
+            task_embeds = self.encode_batch_text(batch_text)
+        else:
+            task_embeds = torch.zeros(x_conds.shape[0], 1, 1, device = device)
         return self.ema.ema_model.sample(x_conds.to(device), task_embeds.to(device), batch_size=batch_size, guidance_weight=guidance_weight)
 
     def train(self):
@@ -870,11 +881,12 @@ class Trainer(object):
                 for _ in range(self.gradient_accumulate_every):
                     x, x_cond, goal = next(self.dl)
                     x, x_cond = x.to(device), x_cond.to(device)
-
-                    goal_embed = self.encode_batch_text(goal)
-                    ### zero whole goal_embed if p < self.cond_drop_chance
-                    goal_embed = goal_embed * (torch.rand(goal_embed.shape[0], 1, 1, device = goal_embed.device) > self.cond_drop_chance).float()
-
+                    if self.cond:
+                        goal_embed = self.encode_batch_text(goal)
+                        ### zero whole goal_embed if p < self.cond_drop_chance
+                        goal_embed = goal_embed * (torch.rand(goal_embed.shape[0], 1, 1, device = goal_embed.device) > self.cond_drop_chance).float()
+                    else:
+                        goal_embed = torch.zeros(x.shape[0], 1, 1, device = device)
 
                     with self.accelerator.autocast():
                         loss = self.model(x, x_cond, goal_embed)
@@ -882,7 +894,10 @@ class Trainer(object):
                         total_loss += loss.item()
 
                         self.accelerator.backward(loss)
-
+                if self.log and accelerator.is_main_process:
+                    wandb.log({'loss': total_loss}, step=self.step)
+                    # currently,use main process to log the loss
+                    # not accurate, but it's okay for now, update later
                 accelerator.clip_grad_norm_(self.model.parameters(), 1.0)
 
                 scale = self.accelerator.scaler.get_scale()
@@ -913,13 +928,15 @@ class Trainer(object):
                             for i, (x, x_cond, label) in enumerate(self.valid_dl):
                                 xs.append(x)
                                 x_conds.append(x_cond.to(device))
-                                task_embeds.append(self.encode_batch_text(label))
-                            
+                                if self.cond:
+                                    task_embeds.append(self.encode_batch_text(label))
+                                else:
+                                    task_embeds.append(torch.zeros(x.shape[0], 1, 1, device = device))
                             with self.accelerator.autocast():
                                 all_xs_list = list(map(lambda n, c, e: self.ema.ema_model.sample(batch_size=n, x_cond=c, task_embed=e), batches, x_conds, task_embeds))
                         
                         print_gpu_utilization()
-                        
+
                         gt_xs = torch.cat(xs, dim = 0) # [batch_size, 3*n, 120, 160]
                         # make it [batchsize*n, 3, 120, 160]
                         n_rows = gt_xs.shape[1] // 3

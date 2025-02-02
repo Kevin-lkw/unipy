@@ -45,7 +45,8 @@ class RawDataset(BaseDataset):
         _episodes_with_length = list(self.episodes_with_length.items())
 
         if self.shuffle:
-            seed = 0
+            import time
+            seed = int(time.time())
             print(f"[Raw Dataset] Shuffling episodes with seed {seed}. ")
             random.seed(seed) # ensure the same shuffle order for all workers
             random.shuffle(_episodes_with_length)
