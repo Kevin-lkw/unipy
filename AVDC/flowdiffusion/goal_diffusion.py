@@ -701,8 +701,8 @@ class Trainer(object):
         diffusion_model,
         tokenizer, 
         text_encoder, 
-        train_set,
-        valid_set,
+        train_set = None,
+        valid_set = None, # if set to None, rollout model
         channels = 3,
         *,
         train_batch_size = 1,
@@ -726,6 +726,7 @@ class Trainer(object):
         cond = True,
         log = False,
         wandb_name = None,
+        rollout_mode = False,
     ):
         super().__init__()
 
@@ -737,7 +738,6 @@ class Trainer(object):
         self.cond = cond
         self.log = log
         self.wandb_name = wandb_name
-        # accelerator
 
         self.accelerator = accelerator
 
@@ -747,6 +747,7 @@ class Trainer(object):
 
         self.channels = channels
 
+        self.rollout_mode = rollout_mode
         # InceptionV3 for fid-score computation
 
         self.inception_v3 = None
@@ -771,20 +772,19 @@ class Trainer(object):
         self.image_size = diffusion_model.image_size
 
         # dataset and dataloader
+        if not rollout_mode: 
+            valid_ind = [i for i in range(len(valid_set))][:num_samples]
 
-        
-        valid_ind = [i for i in range(len(valid_set))][:num_samples]
+            train_set = train_set
+            valid_set = Subset(valid_set, valid_ind)
 
-        train_set = train_set
-        valid_set = Subset(valid_set, valid_ind)
-
-        self.ds = train_set
-        self.valid_ds = valid_set
-        dl = DataLoader(self.ds, batch_size = train_batch_size, shuffle = True, pin_memory = True, num_workers = 4)
-        # dl = dataloader
-        dl = self.accelerator.prepare(dl)
-        self.dl = cycle(dl)
-        self.valid_dl = DataLoader(self.valid_ds, batch_size = valid_batch_size, shuffle = False, pin_memory = True, num_workers = 4)
+            self.ds = train_set
+            self.valid_ds = valid_set
+            dl = DataLoader(self.ds, batch_size = train_batch_size, shuffle = True, pin_memory = True, num_workers = 4)
+            # dl = dataloader
+            dl = self.accelerator.prepare(dl)
+            self.dl = cycle(dl)
+            self.valid_dl = DataLoader(self.valid_ds, batch_size = valid_batch_size, shuffle = False, pin_memory = True, num_workers = 4)
 
 
         # optimizer
@@ -804,7 +804,6 @@ class Trainer(object):
             results_folder = f'{results_folder}/{dt}'
 
         self.results_folder = Path(results_folder)
-        self.results_folder.mkdir(exist_ok = True, parents = True)
 
         # step counter state
 
@@ -829,7 +828,10 @@ class Trainer(object):
             'opt': self.opt.state_dict(),
             'ema': self.ema.state_dict(),
             'scaler': self.accelerator.scaler.state_dict() if exists(self.accelerator.scaler) else None,
-            'version': __version__
+            'version': __version__,
+            'cond': self.cond,
+            'resolution': self.image_size,
+            
         }
 
         torch.save(data, str(self.results_folder / f'model-{milestone}.pt'))
@@ -839,6 +841,26 @@ class Trainer(object):
         device = accelerator.device
 
         data = torch.load(str(self.results_folder / f'model-{milestone}.pt'), map_location=device)
+
+        model = self.accelerator.unwrap_model(self.model)
+        model.load_state_dict(data['model'])
+
+        self.step = data['step']
+        self.opt.load_state_dict(data['opt'])
+        if self.accelerator.is_main_process:
+            self.ema.load_state_dict(data["ema"])
+
+        if 'version' in data:
+            print(f"loading from version {data['version']}")
+
+        if exists(self.accelerator.scaler) and exists(data['scaler']):
+            self.accelerator.scaler.load_state_dict(data['scaler'])
+    
+    def load_model(self, model_path):
+        accelerator = self.accelerator
+        device = accelerator.device 
+
+        data = torch.load(model_path, map_location=device)
 
         model = self.accelerator.unwrap_model(self.model)
         model.load_state_dict(data['model'])
@@ -951,7 +973,7 @@ class Trainer(object):
                         gt_last = gt_xs[:, -1:]
 
 
-
+                        self.results_folder.mkdir(exist_ok = True, parents = True)
                         if self.step == self.save_and_sample_every:
                             os.makedirs(str(self.results_folder / f'imgs'), exist_ok = True)
                             gt_img = torch.cat([gt_first, gt_last, gt_xs], dim=1)

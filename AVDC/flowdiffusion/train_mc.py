@@ -134,7 +134,7 @@ def main(args):
         model=unet,
         image_size=(target_size[1], target_size[0]), # height=imgsz[0], width = imgsz[1]
         timesteps=args.sample_steps, # difussion steps, like 100
-        sampling_timesteps=args.sample_steps,
+        sampling_timesteps=args.sample_steps, # can be less than timesteps (DDIM sampling)
         loss_type='l2',
         objective='pred_v',
         beta_schedule = 'cosine',

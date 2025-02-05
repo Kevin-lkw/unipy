@@ -4,11 +4,10 @@ import cv2
 from gym3.types import DictType
 from gym import spaces
 
-from lib.action_mapping import CameraHierarchicalMapping
-from lib.actions import ActionTransformer
-from lib.policy import MinecraftAgentPolicy
-from lib.torch_util import default_device_type, set_default_torch_device
-
+from vpt.lib.action_mapping import CameraHierarchicalMapping
+from vpt.lib.actions import ActionTransformer
+from vpt.lib.policy import MinecraftAgentPolicy
+from vpt.lib.torch_util import default_device_type, set_default_torch_device
 
 # Hardcoded settings
 AGENT_RESOLUTION = (128, 128)
