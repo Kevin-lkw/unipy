@@ -8,6 +8,7 @@ from einops import rearrange
 from torch.utils.data import Subset
 import wandb
 from accelerate import Accelerator
+from datetime import datetime
 
 """
 vpt contractor data:
@@ -85,6 +86,7 @@ def main(args):
     )
     accelerator.native_amp = True # it seems that this is necessary ?
     wandbname = None
+    timestamp = datetime.now().strftime("%m%d-%H%M%S")
     if args.log and accelerator.is_main_process:
         wandb.init(
             project="mc-unipy",  # 项目名称
@@ -101,7 +103,8 @@ def main(args):
                 "skip": args.skip,
                 "precision": args.precision,
                 "resolution": args.resolution,
-            }
+            },
+            name=f"{args.dataset}-bs{args.batch_size}-skip{args.skip}-{timestamp}",
         )
         wandbname = wandb.run.name
 
@@ -163,7 +166,7 @@ def main(args):
         gradient_accumulate_every = 1,
         num_samples=valid_n, 
         wandb_name = wandbname,
-        results_folder =f'../results/mc',
+        results_folder =f'../results/mc/{timestamp}',
         accelerator = accelerator,
         cond = args.condition,
         log = args.log,
@@ -211,7 +214,7 @@ if __name__ == '__main__':
     parser.add_argument('-l','--learning_rate', type=float, default=1e-4) # set to learning rate
     parser.add_argument('-ss', '--save_steps', type=int, default=5000) # set to number of steps to save and sample
     parser.add_argument('-cond', '--condition', action='store_true') # set to True to use condition
-    parser.add_argument('-d', '--dataset', type=str, default='7xx') # set to dataset
+    parser.add_argument('-d', '--dataset', type=str, default='10xx') # set to dataset
     parser.add_argument('-log', '--log', action='store_true') # set to True to use wandb
     parser.add_argument('-valid_n', '--valid_n', type=int, default=4) # set to number of validation samples
     parser.add_argument('-f', '--frames', type=int, default=8) # set to number of samples per sequence

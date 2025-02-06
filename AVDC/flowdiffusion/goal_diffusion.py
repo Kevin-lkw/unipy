@@ -29,7 +29,6 @@ from pytorch_fid.fid_score import calculate_frechet_distance
 import matplotlib.pyplot as plt
 import numpy as np
 import wandb
-from datetime import datetime
 
 __version__ = "0.0"
 
@@ -797,11 +796,6 @@ class Trainer(object):
             self.ema = EMA(diffusion_model, beta = ema_decay, update_every = ema_update_every)
             self.ema.to(self.device)
 
-        dt = datetime.now().strftime('%m-%d-%H-%M-%S')
-        if wandb_name is not None:
-            results_folder = f'{results_folder}/{dt}-{wandb_name}'
-        else:
-            results_folder = f'{results_folder}/{dt}'
 
         self.results_folder = Path(results_folder)
 
