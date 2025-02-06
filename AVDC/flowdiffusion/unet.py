@@ -1,4 +1,4 @@
-from .guided_diffusion.guided_diffusion.unet import UNetModel
+from guided_diffusion.guided_diffusion.unet import UNetModel
 from torch import nn
 import torch
 from einops import repeat, rearrange

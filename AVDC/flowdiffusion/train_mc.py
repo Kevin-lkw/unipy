@@ -31,6 +31,7 @@ class MCdataset(Dataset):
         frame_width = 128, 
         frame_height = 128, 
         win_len = 128, 
+        skip = 1,
         split = 'train', 
         split_ratio = 0.9, 
         verbose = True, 
@@ -43,6 +44,7 @@ class MCdataset(Dataset):
         self.frame_width = frame_width
         self.frame_height = frame_height
         self.win_len = win_len
+        self.skip = skip
         self.split = split
         self.split_ratio = split_ratio
         self.verbose = verbose
@@ -54,24 +56,27 @@ class MCdataset(Dataset):
             enable_action=self.enable_action,
             frame_width=self.frame_width, 
             frame_height=self.frame_height,
-            win_len=self.win_len, 
+            win_len=self.win_len*self.skip, # sample (win_len*skip) frames
             split=self.split, 
             split_ratio=self.split_ratio, 
             verbose=self.verbose,
             enable_contractor_info=self.enable_contractor_info, # add text data 
         )
+    
     def __len__(self):
         return len(self.dataset)
+    
     def __getitem__(self, idx):
-        img = self.dataset[idx]['image']/255
+        img = self.dataset[idx]['image'] / 255 # normalize to [0, 1]
         x_cond = img[0,:]
-        x = img[1:,:]
+        x = img[self.skip::self.skip,:]
         x = rearrange(x, 'f h w c -> (f c) h w')
         x_cond = rearrange(x_cond, 'h w c -> c h w')
         x = x.float()
         x_cond = x_cond.float()
         task = ""
         return x, x_cond, task
+
 def main(args):
 
     accelerator = Accelerator(
@@ -93,6 +98,7 @@ def main(args):
                 "condition": args.condition,
                 "valid_n": args.valid_n,
                 "frames": args.frames, # samples per sequence
+                "skip": args.skip,
                 "precision": args.precision,
                 "resolution": args.resolution,
             }
@@ -110,6 +116,7 @@ def main(args):
         frame_width=target_size[0],  # 640
         frame_height=target_size[1], # 360
         win_len=sample_per_seq, 
+        skip=args.skip,
         split='train', 
         split_ratio=0.9, 
         verbose=True,
@@ -200,7 +207,7 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--num_steps', type=int, default=80000) # set to number of steps to train
     parser.add_argument('-n', '--sample_steps', type=int, default=100) # set to number of steps to sample
     parser.add_argument('-g', '--guidance_weight', type=int, default=0) # set to positive to use guidance
-    parser.add_argument('-b', '--batch_size', type=int, default=1) # set to batch size
+    parser.add_argument('-b', '--batch_size', type=int, default=2) # set to batch size
     parser.add_argument('-l','--learning_rate', type=float, default=1e-4) # set to learning rate
     parser.add_argument('-ss', '--save_steps', type=int, default=5000) # set to number of steps to save and sample
     parser.add_argument('-cond', '--condition', action='store_true') # set to True to use condition
@@ -210,6 +217,7 @@ if __name__ == '__main__':
     parser.add_argument('-f', '--frames', type=int, default=8) # set to number of samples per sequence
     parser.add_argument('-prci', '--precision', type=str, default='fp16') # set to True to use mixed precision
     parser.add_argument('-r', '--resolution', type=str, default="128,128") # set to resolution
+    parser.add_argument('-skip', '--skip', type=int, default=1) # enable more information in training: sample (skip*args) from dataset  
     args = parser.parse_args()
     args.resolution = tuple(map(int, args.resolution.split(',')))
     if args.mode == 'inference':

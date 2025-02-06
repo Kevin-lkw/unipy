@@ -174,7 +174,7 @@ if __name__ == '__main__':
     parser.add_argument('-t', '--text', type=str, default=None) # set to text to generate samples
     parser.add_argument('-n', '--sample_steps', type=int, default=100) # set to number of steps to sample
     parser.add_argument('-g', '--guidance_weight', type=int, default=0) # set to positive to use guidance
-    parser.add_argument('-b', '--batch_size', type=int, default=1) # set to batch size
+    parser.add_argument('-b', '--batch_size', type=int, default=2) # set to batch size
     parser.add_argument('-l','--learning_rate', type=float, default=1e-4) # set to learning rate
     parser.add_argument('-cond', '--condition', action='store_true') # set to True to use condition
     parser.add_argument('-log', '--log', action='store_true') # set to True to use wandb
