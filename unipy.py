@@ -72,18 +72,45 @@ class Unipy():
         obs = rearrange(obs, 'h w c -> c h w') 
         obs = torch.from_numpy(obs).float()
         batched = obs.unsqueeze(0) # add batch dimension [1,c,h,w]
+        """
+        [0-255] -> [0-1]
+        for input of generative model
+        """
+        batched = batched / 255.0
         frames = self.trainer.sample(x_conds = batched, batch_text = None, batch_size = 1)
         frames = frames.reshape(-1,3, *self.target_size) # [frames,3,h,w]
         frames = rearrange(frames, 'n c h w -> n h w c').cpu().numpy()
         for i in range(frames.shape[0]):
-            predicted_frames.append(frames[i])
+            predicted_frames.append(frames[i]*255)
+        """
+        requirement:
+        - RGB frames
+        - [0,255]
+        - best practice: [640,360]->[128,128]
+        """
         predicted_actions = self.IDMAgent.predict_actions(frames)
         return predicted_actions, predicted_frames
     
+def save_image(obs_list, predicted_frames, output_path):
+    # 将图像按列拼接
+    top_row = np.hstack(predicted_frames)  
+    bottom_row = np.hstack(obs_list)  
+    images = np.vstack((top_row, bottom_row)) 
+
+
+    # 输出路径
+    output_file = os.path.join(output_path, "image.jpg")
+    images = cv2.cvtColor(images, cv2.COLOR_RGB2BGR)  # 转换为BGR格式
+    # 保存图片
+    cv2.imwrite(output_file, images)
+    import ipdb; ipdb.set_trace()
+    print(f"Image saved at {output_file}")
+
 def main(args):
     # or load the policy from the Hugging Face model hub
     policy = Unipy(args=args)
     env = MinecraftSim(
+        action_type="env",
         obs_size=(128, 128), 
         callbacks=[RecordCallback(record_path="./output", fps=30, frame_type="pov")]
     )
@@ -94,25 +121,28 @@ def main(args):
     predicted_frames = [start]
     action_list = []
     # actual number of frames is num_steps * frames(8)
-    for _ in range(1):
+    for chunk in range(1):
         actions, predicted_frames = policy.get_action(start, predicted_frames)
         action_list.append(actions)
-        print("actions",len(actions))
         for i in range(args.frames - 1):
             action = {}
             for k,v in actions.items():
-                action[k] = np.array(v[0][i]).expand_dims(0)
-            import ipdb; ipdb.set_trace()
+                action[k] = v[0][i]
             obs, reward, terminated, truncated, info = env.step(action)
-            obs_list.append(np.random.rand(128,128,3))
+            obs_list.append(obs['image'])
         start = obs_list[-1]
-    # env.close()
+    env.close()
     print("Rollout finished")
     assert len(obs_list) == len(predicted_frames)
+
     dt = datetime.now().strftime('%m%d-%H%M%S')
-    output_path = f"./rollout"
+    output_path = f"./rollout/{dt}"
     os.makedirs(output_path, exist_ok=True)
-    output_path = f"{output_path}/rollout_{dt}.mp4"
+    
+    # save image
+    save_image(obs_list, predicted_frames, output_path)
+
+    output_path = f"{output_path}/video.mp4"
     h,w = args.resolution
     output_container = av.open(output_path, mode='w')
     stream = output_container.add_stream('libx264')
@@ -124,7 +154,6 @@ def main(args):
     for gt_frame, pred_frame in zip(obs_list, predicted_frames):
         separator = np.zeros((10, w, 3), dtype=np.uint8)  # Black separator
         stacked_frame = np.concatenate([gt_frame, separator, pred_frame],axis=0)  # 将两张图像拼接成一张
-        import ipdb; ipdb.set_trace()
         stacked_frame = (stacked_frame * 255).astype(np.uint8)
         # 将numpy数组转换为av的图像帧
         # 注意：av要求图像为YUV格式，需要转换为yuv420p
