@@ -1,30 +1,38 @@
 import torch
 import torch.nn as nn
-from minestudio.models.base_policy import MinePolicy
 from einops import rearrange
 import argparse
-
-from minestudio.simulator import MinecraftSim
-from minestudio.simulator.callbacks import RecordCallback
-from AVDC.flowdiffusion.unet import UnetThor as Unet
 from transformers import CLIPTextModel, CLIPTokenizer
-from AVDC.flowdiffusion.goal_diffusion import GoalGaussianDiffusion, Trainer
 from accelerate import Accelerator
 import pickle
-from vpt.inverse_dynamics_model import IDMAgent
-from tqdm import tqdm
 from datetime import datetime
-import imageio
 import cv2
 import av
 import numpy as np
 import os
+
+from minestudio.simulator import MinecraftSim
+from minestudio.simulator.callbacks import RecordCallback
+from AVDC.flowdiffusion.unet import UnetThor as Unet
+from AVDC.flowdiffusion.goal_diffusion import GoalGaussianDiffusion, Trainer
+
+from vpt.inverse_dynamics_model import IDMAgent
+
 class Unipy():
-    def __init__(self, args):
-        self.frames = args.frames
-        self.target_size = args.resolution
+    def __init__(self,
+            checkpoint_path,
+            idm_model_path = "/nfs-shared/liankewei/vptidm/4x_idm.model",
+            idm_weights_path = "/nfs-shared/liankewei/vptidm/4x_idm.weights",
+            frames = 8,
+            resolution = (128,128),         
+            condition = False,
+            precision = 'fp16',
+            sample_steps = 100,
+        ):
+        self.frames = frames
+        self.target_size = resolution
         unet = Unet()
-        if args.condition:
+        if condition:
             pretrained_model = "openai/clip-vit-base-patch32"
             tokenizer = CLIPTokenizer.from_pretrained(pretrained_model)
             text_encoder = CLIPTextModel.from_pretrained(pretrained_model)
@@ -35,14 +43,14 @@ class Unipy():
             text_encoder = None
         accelerator = Accelerator(
             split_batches = True,
-            mixed_precision = args.precision,
+            mixed_precision = precision,
         )
         diffusion = GoalGaussianDiffusion(
             channels=3*(self.frames-1),
             model=unet,
             image_size=(self.target_size[1], self.target_size[0]), # height=imgsz[0], width = imgsz[1]
-            timesteps=args.sample_steps, # difussion steps, like 100
-            sampling_timesteps=args.sample_steps,
+            timesteps=sample_steps, # difussion steps, like 100
+            sampling_timesteps=sample_steps, # this can be less than timesteps (DDIM sampling)
             loss_type='l2',
             objective='pred_v',
             beta_schedule = 'cosine',
@@ -54,96 +62,85 @@ class Unipy():
             text_encoder=text_encoder,
             accelerator=accelerator,
             rollout_mode=True,
-            cond = args.condition,
+            cond = condition,
         )
-        self.trainer.load_model(args.checkpoint_path)
-        agent_parameters = pickle.load(open("/nfs-shared/liankewei/vptidm/4x_idm.model", "rb"))
+        self.trainer.load_model(checkpoint_path)
+        agent_parameters = pickle.load(open(idm_model_path, "rb"))
         net_kwargs = agent_parameters["model"]["args"]["net"]["args"]
         pi_head_kwargs = agent_parameters["model"]["args"]["pi_head_opts"]
         pi_head_kwargs["temperature"] = float(pi_head_kwargs["temperature"])
         self.IDMAgent = IDMAgent(idm_net_kwargs=net_kwargs, pi_head_kwargs=pi_head_kwargs)
-        self.IDMAgent.load_weights("/nfs-shared/liankewei/vptidm/4x_idm.weights")
-
+        self.IDMAgent.load_weights(idm_weights_path)
+    
     """
-    obs: np.array(h,w,c)
+    IDM requirement:
+    - frames: np.array (n,h,w,c)
+    - RGB frames
+    - [0,255]
+    - best practice: [640,360]->[128,128] (I guess)
+    """
+    def predict_actions(self,frames):
+        return self.IDMAgent.predict_actions(frames)
+    
+    """
+    obs: np.array (h,w,c) \in [0,255]
     predicted_frames: list of np.array(h,w,c)
     """
-    def get_action(self, obs, predicted_frames): 
+    def get_action(self, obs, predicted_frames):
         obs = rearrange(obs, 'h w c -> c h w') 
         obs = torch.from_numpy(obs).float()
         batched = obs.unsqueeze(0) # add batch dimension [1,c,h,w]
         """
-        [0-255] -> [0-1]
-        for input of generative model
+        [0-255] -> [0-1],for input of generative model
         """
         batched = batched / 255.0
         frames = self.trainer.sample(x_conds = batched, batch_text = None, batch_size = 1)
         frames = frames.reshape(-1,3, *self.target_size) # [frames,3,h,w]
         frames = rearrange(frames, 'n c h w -> n h w c').cpu().numpy()
+        frames = frames * 255
         for i in range(frames.shape[0]):
-            predicted_frames.append(frames[i]*255)
-        """
-        requirement:
-        - RGB frames
-        - [0,255]
-        - best practice: [640,360]->[128,128]
-        """
+            predicted_frames.append(frames[i])
+
         predicted_actions = self.IDMAgent.predict_actions(frames)
         return predicted_actions, predicted_frames
-    
-def save_image(obs_list, predicted_frames, output_path):
+
+def create_action_image(action_list, num_frames):
+    action_image = np.zeros((256, 128*num_frames, 3), dtype=np.uint8)  # 创建一个空的图像行
+    for i in range(num_frames-1):
+        for j,item in enumerate(action_list[i].items()):
+            key,value = item
+            action_text = f"{key}: {value}"  # 将动作信息转换为字符串
+            cv2.putText(action_image, action_text, (128*(i+1), 10 + 12*j), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+    return action_image
+
+"""
+save result as image
+obs_list: list of np.array (h,w,c) 
+predicted_frames: list of np.array (h,w,c)
+action_list: env_action, list of dict , dict:{action_name: action_value}
+"""     
+def save_image(obs_list, predicted_frames, action_list, output_path, gt_action=None):
     # 将图像按列拼接
     top_row = np.hstack(predicted_frames)  
+    action_image = create_action_image(action_list, len(predicted_frames))
     bottom_row = np.hstack(obs_list)  
-    images = np.vstack((top_row, bottom_row)) 
+    images = np.vstack((top_row, action_image, bottom_row)) 
 
-
+    if gt_action:
+        action_image = create_action_image(gt_action, len(predicted_frames))
+        images = np.vstack((images, action_image))
     # 输出路径
     output_file = os.path.join(output_path, "image.jpg")
     images = cv2.cvtColor(images, cv2.COLOR_RGB2BGR)  # 转换为BGR格式
     # 保存图片
     cv2.imwrite(output_file, images)
-    import ipdb; ipdb.set_trace()
     print(f"Image saved at {output_file}")
-
-def main(args):
-    # or load the policy from the Hugging Face model hub
-    policy = Unipy(args=args)
-    env = MinecraftSim(
-        action_type="env",
-        obs_size=(128, 128), 
-        callbacks=[RecordCallback(record_path="./output", fps=30, frame_type="pov")]
-    )
-    obs, info = env.reset() # obs (h,w,c)
-
-    start = obs['image']
-    obs_list = [start]
-    predicted_frames = [start]
-    action_list = []
-    # actual number of frames is num_steps * frames(8)
-    for chunk in range(1):
-        actions, predicted_frames = policy.get_action(start, predicted_frames)
-        action_list.append(actions)
-        for i in range(args.frames - 1):
-            action = {}
-            for k,v in actions.items():
-                action[k] = v[0][i]
-            obs, reward, terminated, truncated, info = env.step(action)
-            obs_list.append(obs['image'])
-        start = obs_list[-1]
-    env.close()
-    print("Rollout finished")
-    assert len(obs_list) == len(predicted_frames)
-
-    dt = datetime.now().strftime('%m%d-%H%M%S')
-    output_path = f"./rollout/{dt}"
-    os.makedirs(output_path, exist_ok=True)
-    
-    # save image
-    save_image(obs_list, predicted_frames, output_path)
-
+"""
+same as save_image
+"""
+def save_video(obs_list, predicted_frames, action_list, output_path, resolution):
     output_path = f"{output_path}/video.mp4"
-    h,w = args.resolution
+    h,w = resolution
     output_container = av.open(output_path, mode='w')
     stream = output_container.add_stream('libx264')
     stream.width = w
@@ -167,13 +164,55 @@ def main(args):
         output_container.mux(packet)
 
     output_container.close()
+def main(args):
+    # or load the policy from the Hugging Face model hub
+    policy = Unipy(
+        checkpoint_path=args.checkpoint_path,
+        frames=args.frames,
+        resolution=args.resolution,
+        condition=args.condition,
+        precision=args.precision,
+        sample_steps=args.sample_steps
+    )
+    env = MinecraftSim(
+        action_type="env",
+        obs_size=(128, 128), 
+        callbacks=[RecordCallback(record_path="./output", fps=30, frame_type="pov")]
+    )
+    obs, info = env.reset() # obs (h,w,c)
+
+    start = obs['image']
+    obs_list = [start]
+    predicted_frames = [start]
+    action_list = []
+    # actual number of frames is num_steps * frames(8)
+    for chunk in range(1):
+        actions, predicted_frames = policy.get_action(start, predicted_frames)
+        for i in range(args.frames - 1):
+            action = {}
+            for k,v in actions.items():
+                action[k] = v[0][i]
+            obs, reward, terminated, truncated, info = env.step(action)
+            obs_list.append(obs['image'])
+            action_list.append(action)
+        start = obs_list[-1]
+    env.close()
+    print("Rollout finished")
+    assert len(obs_list) == len(predicted_frames)
+
+    dt = datetime.now().strftime('%m%d-%H%M%S')
+    output_path = f"./rollout/{dt}"
+    os.makedirs(output_path, exist_ok=True)
+    
+    # save image
+    save_image(obs_list, predicted_frames, action_list, output_path)
+    # save_video(obs_list, predicted_frames, action_list, output_path, args.resolution)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('-c', '--checkpoint_path', type=str, default="./AVDC/results/mc/02-01-22-07-00/model-13.pt") # set to checkpoint number to resume training or generate samples
+    parser.add_argument('-c', '--checkpoint_path', type=str, default="./AVDC/results/mc/02-01-22-54-16/model-11.pt") # set to checkpoint number to resume training or generate samples
     parser.add_argument('-t', '--text', type=str, default=None) # set to text to generate samples
     parser.add_argument('-n', '--sample_steps', type=int, default=100) # set to number of steps to sample
-    parser.add_argument('-g', '--guidance_weight', type=int, default=0) # set to positive to use guidance
     parser.add_argument('-b', '--batch_size', type=int, default=2) # set to batch size
     parser.add_argument('-l','--learning_rate', type=float, default=1e-4) # set to learning rate
     parser.add_argument('-cond', '--condition', action='store_true') # set to True to use condition
@@ -185,3 +224,9 @@ if __name__ == '__main__':
     args = parser.parse_args()
     args.resolution = tuple(map(int, args.resolution.split(',')))
     main(args)
+    # obs_list = [np.random.randint(0,255,(128,128,3), dtype=np.uint8) for _ in range(10)]
+    # predicted_frames = [np.random.randint(0,255,(128,128,3), dtype=np.uint8) for _ in range(10)]
+    # action_list = [{"action1":0,"action2":0} for _ in range(10)]
+    # output_path = "./output/tmp"
+    # os.makedirs(output_path, exist_ok=True)
+    # save_image(obs_list, predicted_frames, action_list, output_path, gt_action=action_list)
