@@ -1,0 +1,26 @@
+
+defaults:
+  - base
+  - _self_
+
+task_conf:
+  traj_condition:
+    text: "Run as far as you can. "
+    obs_conf:
+      task: "explore: run"
+      ref_video: "${oc.env:JARVISBASE_TRAJS}/diverses/explore_run/human/3.mp4"
+      ins_type: "${oc.env:INS_TYPE}"
+    reward_conf:
+      mine_block: 
+        none:
+          objs:
+            - none
+          quantity_rewarded: 3
+          reward: 1.0
+
+
+candidate_preferred_spawn_biome: 
+  - plains
+candidate_weather: 
+  - clear
+

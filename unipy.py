@@ -17,6 +17,7 @@ from AVDC.flowdiffusion.unet import UnetThor as Unet
 from AVDC.flowdiffusion.goal_diffusion import GoalGaussianDiffusion, Trainer
 
 from vpt.inverse_dynamics_model import IDMAgent
+from minestudio.data.minecraft.utils import visualize_dataloader
 
 class Unipy():
     def __init__(self,
@@ -103,15 +104,21 @@ class Unipy():
 
         predicted_actions = self.IDMAgent.predict_actions(frames)
         return predicted_actions, predicted_frames
-
-def create_action_image(action_list, num_frames):
-    action_image = np.zeros((256, 128*num_frames, 3), dtype=np.uint8)  # 创建一个空的图像行
+"""
+create list of np.array (128,w,c) as image printed with action
+"""
+def create_action_frames(action_list, num_frames):
+    action_frames = []
+    action_image = np.zeros((256, 128, 3), dtype=np.uint8)  # 创建一个空的图像行
+    action_frames.append(action_image)
     for i in range(num_frames-1):
+        action_image = np.zeros((256, 128, 3), dtype=np.uint8)  # 创建一个空的图像行
         for j,item in enumerate(action_list[i].items()):
             key,value = item
             action_text = f"{key}: {value}"  # 将动作信息转换为字符串
-            cv2.putText(action_image, action_text, (128*(i+1), 10 + 12*j), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-    return action_image
+            cv2.putText(action_image, action_text, (0, 10 + 12*j), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+        action_frames.append(action_image)
+    return action_frames
 
 """
 save result as image
@@ -122,12 +129,14 @@ action_list: env_action, list of dict , dict:{action_name: action_value}
 def save_image(obs_list, predicted_frames, action_list, output_path, gt_action=None):
     # 将图像按列拼接
     top_row = np.hstack(predicted_frames)  
-    action_image = create_action_image(action_list, len(predicted_frames))
+    action_frames = create_action_frames(action_list, len(predicted_frames))
+    action_image = np.hstack(action_frames)
     bottom_row = np.hstack(obs_list)  
     images = np.vstack((top_row, action_image, bottom_row)) 
 
     if gt_action:
-        action_image = create_action_image(gt_action, len(predicted_frames))
+        action_frames = create_action_frames(gt_action, len(predicted_frames))
+        action_image = np.hstack(action_frames)
         images = np.vstack((images, action_image))
     # 输出路径
     output_file = os.path.join(output_path, "image.jpg")
@@ -138,32 +147,29 @@ def save_image(obs_list, predicted_frames, action_list, output_path, gt_action=N
 """
 same as save_image
 """
-def save_video(obs_list, predicted_frames, action_list, output_path, resolution):
-    output_path = f"{output_path}/video.mp4"
-    h,w = resolution
-    output_container = av.open(output_path, mode='w')
-    stream = output_container.add_stream('libx264')
-    stream.width = w
-    stream.height = h
-    stream.pix_fmt = 'yuv420p'
-
-    # 遍历并写入帧
-    for gt_frame, pred_frame in zip(obs_list, predicted_frames):
-        separator = np.zeros((10, w, 3), dtype=np.uint8)  # Black separator
-        stacked_frame = np.concatenate([gt_frame, separator, pred_frame],axis=0)  # 将两张图像拼接成一张
-        stacked_frame = (stacked_frame * 255).astype(np.uint8)
-        # 将numpy数组转换为av的图像帧
-        # 注意：av要求图像为YUV格式，需要转换为yuv420p
-        frame = av.VideoFrame.from_ndarray(stacked_frame, format='rgb24')
-
-        # 编码并写入视频流
-        for packet in stream.encode(frame):
+def save_video(obs_list, predicted_frames, action_list, output_path, gt_action=None):
+    os.makedirs(output_path, exist_ok=True)
+    output_path = os.path.join(output_path, "video.mp4")
+    h,w = predicted_frames[0].shape[:2]
+    with av.open(output_path, mode='w', format="mp4") as output_container:
+        action_frames = create_action_frames(action_list, len(predicted_frames))
+        # import ipdb; ipdb.set_trace()
+        stream = output_container.add_stream('libx264',rate=30)
+        stream.width = w*2
+        stream.height = obs_list[0].shape[0] + predicted_frames[0].shape[0]
+        stream.pix_fmt = 'yuv420p'
+        for i in range(len(predicted_frames)):
+            frame = np.concatenate((predicted_frames[i], obs_list[i]),axis=0)
+            frame = np.concatenate((frame, action_frames[i]),axis=1)
+            frame = frame.astype(np.uint8)
+            # assert frame.shape[1] == stream.width and frame.shape[0] == stream.height, f"frame shape not match"
+            frame = av.VideoFrame.from_ndarray(frame, format='rgb24')
+            for packet in stream.encode(frame):
+                output_container.mux(packet)
+        for packet in stream.encode(): # important step...
             output_container.mux(packet)
 
-    for packet in stream.encode():
-        output_container.mux(packet)
-
-    output_container.close()
+    print(f"Video saved at {output_path}")
 def main(args):
     # or load the policy from the Hugging Face model hub
     policy = Unipy(
@@ -186,7 +192,7 @@ def main(args):
     predicted_frames = [start]
     action_list = []
     # actual number of frames is num_steps * frames(8)
-    for chunk in range(1):
+    for chunk in range(args.steps):
         actions, predicted_frames = policy.get_action(start, predicted_frames)
         for i in range(args.frames - 1):
             action = {}
@@ -203,30 +209,38 @@ def main(args):
     dt = datetime.now().strftime('%m%d-%H%M%S')
     output_path = f"./rollout/{dt}"
     os.makedirs(output_path, exist_ok=True)
-    
-    # save image
-    save_image(obs_list, predicted_frames, action_list, output_path)
-    # save_video(obs_list, predicted_frames, action_list, output_path, args.resolution)
+    log_file = os.path.join(output_path, "log.txt")
+    with open(log_file, "w") as f:
+        #output dict args
+        f.write(str(args))
+    # save_image(obs_list, predicted_frames, action_list, output_path)
+    save_video(obs_list, predicted_frames, action_list, output_path)
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', '--checkpoint_path', type=str, default="./AVDC/results/mc/02-01-22-54-16/model-11.pt") # set to checkpoint number to resume training or generate samples
+    parser.add_argument('-s', '--steps', type=int, default=1) # set to number of rollout steps, total steps = steps*8
     parser.add_argument('-t', '--text', type=str, default=None) # set to text to generate samples
     parser.add_argument('-n', '--sample_steps', type=int, default=100) # set to number of steps to sample
     parser.add_argument('-b', '--batch_size', type=int, default=2) # set to batch size
-    parser.add_argument('-l','--learning_rate', type=float, default=1e-4) # set to learning rate
     parser.add_argument('-cond', '--condition', action='store_true') # set to True to use condition
     parser.add_argument('-log', '--log', action='store_true') # set to True to use wandb
     parser.add_argument('-valid_n', '--valid_n', type=int, default=4) # set to number of validation samples
     parser.add_argument('-f', '--frames', type=int, default=8) # set to number of samples per sequence
     parser.add_argument('-prci', '--precision', type=str, default='fp16') # set to True to use mixed precision
     parser.add_argument('-r', '--resolution', type=str, default="128,128") # set to resolution
+    parser.add_argument('-steps', '--steps', type=int, default=1) # set to number of rollout steps, total steps = steps*8
     args = parser.parse_args()
     args.resolution = tuple(map(int, args.resolution.split(',')))
     main(args)
-    # obs_list = [np.random.randint(0,255,(128,128,3), dtype=np.uint8) for _ in range(10)]
-    # predicted_frames = [np.random.randint(0,255,(128,128,3), dtype=np.uint8) for _ in range(10)]
-    # action_list = [{"action1":0,"action2":0} for _ in range(10)]
+
+    # number = args.steps
+    # obs_list = [np.random.randint(0,255,(128,128,3), dtype=np.uint8) for _ in range(number)]
+    # predicted_frames = [np.random.randint(0,255,(128,128,3), dtype=np.uint8) for _ in range(number)]
+    # action_list = [{'attack': 0, 'back': 0, 'forward': 1, 'jump': 0, 'left': 0, 'right': 0, 'sneak': 0, 'sprint': 0, 'use': 0, 'drop': 0, 
+    #                 'inventory': 0, 'hotbar.1': 0, 'hotbar.2': 0, 'hotbar.3': 0, 'hotbar.4': 0, 'hotbar.5': 0, 
+    #                 'hotbar.6': 0, 'hotbar.7': 0, 'hotbar.8': 0, 'hotbar.9': 0, 'camera': [0., 0.]} for _ in range(number)]
     # output_path = "./output/tmp"
-    # os.makedirs(output_path, exist_ok=True)
-    # save_image(obs_list, predicted_frames, action_list, output_path, gt_action=action_list)
+    # # os.makedirs(output_path, exist_ok=True)
+    # save_video(obs_list, predicted_frames, action_list, output_path)

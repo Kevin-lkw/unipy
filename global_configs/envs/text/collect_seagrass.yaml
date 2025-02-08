@@ -1,0 +1,28 @@
+
+defaults:
+  - base
+  - _self_
+
+task_conf:
+  traj_condition:
+    text: "mine block seagrass"
+    obs_conf:
+      task: "collect: seagrass"
+      ref_video: "${oc.env:JARVISBASE_TRAJS}/diverses/collect_seagrass/human/0.mp4"
+      ins_type: "${oc.env:INS_TYPE}"
+    reward_conf:
+      mine_block: 
+        seagrass:
+          objs:
+            - seagrass
+            - tall_seagrass
+            - kelp
+            - kelp_plant
+          quantity_rewarded: 1000
+          reward: 1.0
+
+
+candidate_preferred_spawn_biome: 
+  - sea
+candidate_weather: 
+  - clear

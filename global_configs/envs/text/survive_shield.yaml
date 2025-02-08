@@ -1,0 +1,42 @@
+
+defaults:
+  - base
+  - _self_
+
+task_conf:
+  traj_condition:
+    text: "use item shield"
+    obs_conf:
+      task: "survive: shield"
+      ref_video: "${oc.env:JARVISBASE_TRAJS}/diverses/survive_shield/human/0.mp4"
+      ins_type: "${oc.env:INS_TYPE}"
+    reward_conf:
+      use_item: 
+        shield:
+          objs:
+            - shield
+          quantity_rewarded: 1000
+          reward: 1.0
+
+
+candidate_preferred_spawn_biome: 
+  - plains
+candidate_weather: 
+  - clear
+
+summon_mobs: 
+  - 
+    mob_name: zombie
+    range_x: [-5, 5]
+    range_z: [5, 5]
+    number: 3
+
+custom_init_commands:
+  - /time set night
+  - /effect give @a night_vision 99999 250 true
+  - /replaceitem entity @s weapon.mainhand minecraft:shield
+  - /replaceitem entity @s armor.head minecraft:diamond_helmet
+  - /replaceitem entity @s armor.chest minecraft:diamond_chestplate
+  - /replaceitem entity @s armor.legs minecraft:diamond_leggings
+  - /replaceitem entity @s armor.feet minecraft:diamond_boots
+

@@ -1,0 +1,26 @@
+
+defaults:
+  - base
+  - _self_
+
+task_conf:
+  traj_condition:
+    text: "custom open chest"
+    obs_conf:
+      task: "explore: chest"
+      ref_video: "${oc.env:JARVISBASE_TRAJS}/diverses/explore_chest/human/0.mp4"
+      ins_type: "${oc.env:INS_TYPE}"
+    reward_conf:
+      use_item: 
+        chest:
+          objs:
+            - chest
+          quantity_rewarded: 1000
+          reward: 1.0
+
+
+candidate_preferred_spawn_biome: 
+  - in_front_of_chest_house
+candidate_weather: 
+  - clear
+

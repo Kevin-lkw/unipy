@@ -1,0 +1,26 @@
+defaults:
+  - base
+  - _self_
+
+task_conf:
+  traj_condition:
+    # text: "Gather *grass* on the ground."
+    text: "grass"
+    obs_conf:
+      task: "collect: grass"
+      ref_video: "${oc.env:JARVISBASE_TRAJS}/diverses/collect_grass/human/0.mp4"
+      ins_type: "${oc.env:INS_TYPE}"
+    reward_conf:
+      mine_block: 
+        grass:
+          objs:
+            - grass
+            - tall_grass
+          quantity_rewarded: 1000
+          reward: 1.0
+
+
+candidate_preferred_spawn_biome: 
+  - plains
+candidate_weather: 
+  - clear

@@ -1,0 +1,44 @@
+defaults:
+  - base
+  - _self_
+
+task_conf:
+  traj_condition:
+    text: "portal"
+    obs_conf:
+      task: "step into the open portal"
+      ref_video: "/nfs-shared/liankewei/jarvisbase/trajs/portal/opened/1.mp4"
+      ins_type: "${oc.env:INS_TYPE}"
+    reward_conf:
+      mine_block: 
+        dirt:
+          objs:
+            - someobj
+          quantity_rewarded: 1000
+          reward: 1.0
+
+candidate_preferred_spawn_biome: 
+  - plains
+candidate_weather: 
+  - clear
+
+custom_init_commands:
+- /setblock ^ ^ ^5 obsidian
+- /setblock ^ ^1 ^5 obsidian
+- /setblock ^ ^2 ^5 obsidian
+- /setblock ^ ^3 ^5 obsidian
+- /setblock ^ ^4 ^5 obsidian
+- /setblock ^ ^5 ^5 obsidian
+- /setblock ^1 ^5 ^5 obsidian
+- /setblock ^2 ^5 ^5 obsidian
+- /setblock ^3 ^5 ^5 obsidian
+- /setblock ^4 ^5 ^5 obsidian
+- /setblock ^4 ^4 ^5 obsidian
+- /setblock ^4 ^3 ^5 obsidian
+- /setblock ^4 ^2 ^5 obsidian
+- /setblock ^4 ^1 ^5 obsidian
+- /setblock ^4 ^ ^5 obsidian
+- /setblock ^3 ^ ^5 obsidian
+- /setblock ^2 ^ ^5 obsidian
+- /setblock ^1 ^ ^5 obsidian
+- /setblock ^2 ^1 ^5 fire
